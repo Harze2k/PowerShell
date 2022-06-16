@@ -95,6 +95,6 @@ if (CheckConnectionAndUser -TestConnectionToServer "SRV-010")
 else
 {
     Write-Host "No connection yet to company network"
-    ReRunIntuneDeployment -AppID '00dfed0d-dfc2-48ad-b031-2f3d0e750843' -Quiet ## Remove the regvaule for $AppID so it will rerun quicker.
+    ReRunIntuneDeployment -AppID '00dfed0d-dfc2-48ad-b031-2f3d0e750843' -Quiet ## Remove the regvaule for $AppID so it will rerun quicker. ##
     Exit 0
 }
