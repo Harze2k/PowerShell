@@ -78,6 +78,7 @@ Function Get-Uninstaller
 	    {
       		$keys = @($local_key, $machine_key32, $machine_key64)
       	}
+        $Name = $Name.Replace('*','')
         $return = @()
         $return = @(Get-ItemProperty -Path $keys -ErrorAction 'SilentlyContinue' | Where-Object { ($_.DisplayName -like "*$Name*") -or ($_.PsChildName -like "*$Name*") } -ErrorAction SilentlyContinue | Select-Object PsPath,DisplayVersion,DisplayName,UninstallString,InstallSource,InstallLocation,QuietUninstallString,InstallDate,MsiExec_Status,RunningStatus -ErrorAction SilentlyContinue)
         
@@ -225,4 +226,15 @@ Function Get-Uninstaller
                 }
       		}	
         }
+}
+
+if (Get-Uninstaller -Name "*Microsoft Teams*" -CheckDetection)
+{
+    Write-Host "AppFound,AllGood!"
+    Exit 0
+}
+else 
+{
+    Write-Host "Not found!"
+    Exit 1
 }
