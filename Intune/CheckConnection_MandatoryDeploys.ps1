@@ -36,7 +36,7 @@ Function CurrentUser
 
 Function CheckConnectionAndUser
 {
-Param([string]$TestConnectionToServer)
+	Param([string]$TestConnectionToServer)
 	
     $currUser = CurrentUser #Current logged in user
     try
