@@ -56,6 +56,21 @@ Function CheckConnectionAndUser
     }
 }
 
+Function ReRunIntuneDeployment
+{
+        $a = '00dfed0d-dfc2-48ad-b031-2f3d0e750843_3'
+        $a = $a.Replace('_*','').Replace('*','')
+        $a = $a -replace '^([_0-9])$'
+    Param($AppID)
+    $Path = "HKLM:SOFTWARE\Microsoft\IntuneManagementExtension\Win32Apps"
+    $UserObjectID = (get-ChildItem -Directory $Path -Depth 0 | Select-Object PSChildName | Where-Object {$_.PSChildName -match '([\w\-]+)' -and ($_.PSChildName) -notmatch '00000000-0000-0000-0000-000000000000' -and ($_.PSChildName) -notmatch 'Reporting'}).PSChildName
+    $a = $a.Replace('_*','').Replace('_','')
+    $App = $a.Substring(0, $a.IndexOf('[*_]')) #.Substring(0, $a.IndexOf('*'))
+    $Return = (Get-ChildItem -Path $Path\$UserObjectID) -match $App | Remove-Item -Recurse -Force -WhatIf -Verbose
+    $return
+}
+ReRunIntuneDeployment -AppID '00dfed0d-dfc2-48ad-b031-2f3d0e750843*'
+
 if (CheckConnectionAndUser -TestConnectionToServer "SRV-010")
 {
     Write-Host "AccessToInternalDomain"
@@ -65,12 +80,5 @@ else
     Write-Host "No connection yet to company network"
 }
 
-Connect-MSGraph -ForceInteractive
-Install-Module Microsoft.Graph.Intune -Force -Verbose
-# Get all Apps and their id
-$Apps = Get-DeviceAppManagement_MobileApps 
-$Apps | select displayName, id
 
-# Get Apps and their id, filter on App Name
-$Apps = Get-DeviceAppManagement_MobileApps -Filter "contains(displayName, 'P2P')"
-$Apps | select displayName, id
+
