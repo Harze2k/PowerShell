@@ -1,0 +1,453 @@
+Function Install-LanguageCabs {
+    param (
+    [Parameter(Mandatory=$true)]
+    [ValidateNotNullOrEmpty()]
+    [String]$Language,
+    [Parameter(Mandatory=$true)]
+    [ValidateNotNullOrEmpty()]
+    [ValidateScript({ 
+        if ($_ -notin 'arm', 'amd64') {
+            throw "The Arch parameter must be either 'amd64' or 'arm'. amd64 is for standard x64. x86 doesnt work at all from what iv seen."
+        }
+        return $true
+    })]
+    [String]$Arch,
+    [Switch]$Install,
+    [Parameter(Mandatory=$true)]
+    [ValidateNotNullOrEmpty()]
+    [ValidateScript({
+        if ($_ -ne ".\") {
+            New-Item -Path $_ -ItemType Directory -Force -ErrorAction SilentlyContinue
+            Set-Location $_
+        }   return $true
+    })]
+    [String]$Path,
+    [Parameter(Mandatory=$false)]
+    [ValidateScript({
+        if (-not ($_)) {
+            throw "The Build parameter cannot be empty or null."
+        }
+        if (-not ($_ -match '\d{5}\.\d+$')) {
+            throw "Build string must be 5 digits.anynumberofdigits so i.e 25300.457"
+        }return $true
+    })]
+    [String]$Build,
+    [Parameter(Mandatory=$true)]
+    [ValidateScript({ 
+        if ($_ -notin '10','11') {
+            throw "The Os parameter must be either '10' or '11'."
+        }
+        return $true
+    })]
+    [String]$Os,
+    [Switch]$LocalRepository,
+    [Parameter(Mandatory=$false)]
+    [ValidateScript({
+        if (-not ($_)) {
+            throw "The LocalRepositoryPath parameter cannot be empty or null."
+        }
+        if (-not (Test-Path "$_\$Os\$Build\$language\*.cab" -PathType Any)) {
+            throw "The path specified ""$_\$Os\$Build\$language"" in the LocalRepositoryPath parameter does not exist. Or the path doesnt contain any cab files to install."
+        }   return $true
+    })]
+    [String]$LocalRepositoryPath,
+    [Parameter(Mandatory=$true)]
+    [ValidateScript({
+        if (-not ($_)) {
+            throw "The ToastImage parameter cannot be empty or null."
+        }
+        if (-not (Test-Path $_ -PathType Any)) {
+            throw "The path specified ""$_"" in the ToastImage parameter does not exist. It needs to point directly to the full path or a image file."
+        }   return $true
+    })]
+    [String]$ToastImage,
+    [string]$ProgressFile)
+    Start-Transcript -Path "C:\Temp\Intune\Scripts\TransLogOOBEInstallCAB.log" -Force -Verbose -ErrorAction SilentlyContinue
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+    $Headers = @{
+        'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:100.0) Gecko/20100101 Firefox/100.0'
+        'Accept' = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+        'Accept-Language' = 'en-US,en;q=0.5'
+    }
+    $WebResponse = (Invoke-WebRequest -Uri "https://uupdump.net/known.php?q=windows+$($Os)+$($Build -replace '10.0.','')" -UseBasicParsing -MaximumRedirection 1 -Method GET -Headers $Headers).Links
+    #if ($null -ne $WebResponse) {
+    $href= ($WebResponse | Where-Object { $_.href -match "./selectlang.php\?id"} -ErrorAction SilentlyContinue)
+    $UpdateID = (($href | Where-Object {$_.outerHTML -match $Arch}).href).split("=")[1]
+    try {
+        $Links = (Invoke-WebRequest -UseBasicParsing -Uri "https://uupdump.net/get.php?id=$UpdateID&pack=$Language&edition=core" -Method GET -Headers $Headers -MaximumRedirection 1).Links
+    }
+    catch {
+        $_.Exception.Message
+        $Install = $null
+        $Links=$null
+    }
+    if($Links) {
+        $Lang = $Language.Split('-')[0]
+        Write-Host "============================================================"
+        Write-Host "Start of Finding and downloading Cab files." -ForegroundColor Green
+        Write-Host "============================================================"
+        foreach ($link in ($Links.outerHTML -match ".*(Language|LanguageFeatures).*$Lang-.*")) {
+            $URL = $link.Split('"')[1]
+            $Filename = $link.Split('>')[1].Split('<')[0] -replace '\s',''
+            $PackageName = ($Filename -split ('[_-]' + $Lang))[0]
+            $Filename = $Filename.Replace($PackageName,[cultureinfo]::GetCultureInfo('en-US').TextInfo.ToTitleCase($PackageName))
+            $Filename = $Filename.TrimStart('Cabs_')
+            $Filename = $Filename.Replace('Ocr','OCR')
+            foreach ($word in ('Pack','Feat','ToSpeech')) {
+                $Filename = $Filename.Replace($word.ToLower(),$word)
+            }
+            Write-Host $filename
+            if (-not (Test-Path -LiteralPath $Filename -PathType Leaf)) {
+                try {
+                    if ($LocalRepository){
+                        Copy-Item -LiteralPath "$LocalRepositoryPath\$Os\$Build\$language\*.cab" -Destination .\ -Force
+                    }
+                    else {
+                        Invoke-WebRequest -UseBasicParsing -Uri $URL -Headers $Headers -OutFile $Filename -ErrorAction SilentlyContinue
+                        Write-Host "Downloading: $Filename to path: $Path" -ForegroundColor Blue
+                    }
+                }
+                catch {
+                    $_.Exception.Message
+                }
+            }
+            else {
+                Write-Host "No download needed, File: $Filename exist in path: $Path" -ForegroundColor Green     
+            }
+        }
+    }
+    else {
+        Write-Host "Was a problem downloading from: " -NoNewline -ForegroundColor Red
+        Write-Host "https://uupdump.net/get.php?id=$UpdateID&pack=$Language&edition=core"
+        if (Test-Path -Path $path -Filter "\(Microsoft-Windows-LanguageFeatures*.cab)|(\Microsoft-Windows-Client*.esd)|(\Microsoft-Windows-Client*.cab)") {
+            Write-Host "But! The files in the current directory match what we are after so no need for downloading anything!" -ForegroundColor Green
+            $Install = $True 
+        }
+        elseif($LocalRepository) {   
+            if(Test-Path -Path $LocalRepositoryPath\$Os\$Build\$language -Filter "\(Microsoft-Windows-LanguageFeatures*.cab)|(\Microsoft-Windows-Client*.esd)|(\Microsoft-Windows-Client*.cab)") {
+                Write-Host "But! Since you specified a local repository to download from and we can access them there, everything is good!" -ForegroundColor Green 
+                Copy-Item -LiteralPath "$LocalRepositoryPath\$Os\$Build\$language\*.cab" -Destination .\ -Force -Verbose
+                $Install = $True 
+            }
+        }
+        else{
+            Write-Host "And no local files was found in $path and no LocalRepository was specified" -ForegroundColor Red    
+            Write-Host "Will have to abort Language CAB Install and retry on next attempt" -ForegroundColor Red
+            $Install = $null
+            Exit 2
+        }
+    }
+    if ($Install) {
+        if(-Not $LocalRepository) {
+            try{
+                if(Test-Path -Path $path -Filter "\Microsoft-Windows-Client-LanguagePack-Package*.cab") { 
+                    Write-Host "============================================================"
+                    Write-Host "No need for ESD to CAB conversion, its done." -ForegroundColor Green
+                    Write-Host "============================================================"
+                }
+                elseif(!(Test-Path -Path $path -Filter "\Microsoft-Windows-Client-LanguagePack-Package*.cab") -and (Test-Path -Path $path -Filter "\Microsoft-Windows-Client-LanguagePack-Package*.esd")) {
+                    Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/abbodi1406/WHD/raw/master/scripts/ESD2CAB-CAB2ESD-2.zip' -Headers $Headers -OutFile "$path\ESD2CAB.zip" -ErrorAction SilentlyContinue
+                    Start-Sleep 1
+                    Expand-Archive -Path "$path\ESD2CAB.zip" -DestinationPath "$path\" -Force -ErrorAction Stop
+                    Start-Sleep 1
+                    $file = Get-Content -Path ".\esd2cab_CLI.cmd"
+                    $file = $file | Where-Object { $_ -notmatch "echo Press any key to exit\.\.\." } | Where-Object { $_ -notmatch "pause >nul" } #Removes the need to interact with the ESD to CAB conversion
+                    Set-Content -Path ".\esd2cab_CLI.cmd" -Value $file
+                    Start-Sleep 1
+                    Write-Host "============================================================"
+                    Write-Host "Start of converting .esd file to usable .cab file." -ForegroundColor Green
+                    Write-Host "============================================================"
+                    .\esd2cab_CLI.cmd
+                }
+                else {
+                    Write-Host "Should be .cab files in this current directory but none was found, its a mystery!" -ForegroundColor Red
+                }
+            }   
+            catch {
+                $_.Exception.Message    
+            }
+        }
+        Remove-PSDrive -Name HKCR -ErrorAction SilentlyContinue
+        $command = @(
+            "dism /online /add-package /packagepath:$path\Microsoft-Windows-Client-LanguagePack-Package_$Language-$arch-$Language.cab /norestart /LogPath:$path\$Language-CAB.log /LogLevel:3",
+            "dism /online /add-package /packagepath:$path\Microsoft-Windows-LanguageFeatures-Basic-$Language-Package-$arch.cab /norestart /LogPath:$path\$Language-CAB.log /LogLevel:3",
+            "dism /online /add-package /packagepath:$path\Microsoft-Windows-LanguageFeatures-Handwriting-$Language-Package-$arch.cab /norestart /LogPath:$path\$Language-CAB.log /LogLevel:3",
+            "dism /online /add-package /packagepath:$path\Microsoft-Windows-LanguageFeatures-OCR-$Language-Package-$arch.cab /norestart /LogPath:$path\$Language-CAB.log /LogLevel:3",
+            "dism /online /add-package /packagepath:$path\Microsoft-Windows-LanguageFeatures-TextToSpeech-$Language-Package-$arch.cab /norestart /LogPath:$path\$Language-CAB.log /LogLevel:3"
+        )
+        if($Language -eq "ja-jp" -or $Language -eq "en-us" -or $Language -eq "en-uk") {
+            $command += "dism /online /add-package /packagepath:$path\Microsoft-Windows-LanguageFeatures-Speech-$Language-Package-$arch.cab /norestart /LogPath:$path\$Language-CAB.log /LogLevel:3"
+        }
+
+        Get-Job | Remove-Job -Force -Confirm:$false
+        Remove-item "$path\ErrorObject.log" -Force -Recurse -Confirm:$false -ErrorAction SilentlyContinue 
+        Remove-item "$path\$Language-CAB.log" -Force -Recurse -Confirm:$false -ErrorAction SilentlyContinue
+        $elapsedTime = Measure-Command {
+            $jobList = @()
+            for ($i = 0; $i -lt ($command.Length); $i++) {
+                $JobName = switch ($i) {
+                    0 { "($language)-Client-LanguagePack" }
+                    1 { "LanguageFeatures-Basic" }
+                    2 { "LanguageFeatures-Handwriting" }
+                    3 { "LanguageFeatures-OCR" }
+                    4 { "LanguageFeatures-TextToSpeech" }
+                    5 { "LanguageFeatures-Speech" }
+                }
+                $job = Start-Job -Name $jobName -ScriptBlock { 
+                    param($command,$JobName,$Path)
+                        try {
+                            $logData = @{
+                                StartTimestamp = Get-Date
+                                Command = $Command
+                                EndTimestamp = ""
+                                ElapsedTime = ""
+                                InstallStatus = ""
+                            }
+                            $DISM = & cmd /c "$command" 
+                            $logData.EndTimestamp = Get-Date
+                            $logData.ElapsedTime = [datetime]::ParseExact($logData.EndTimestamp.ToString("yyyy-MM-dd hh:mm:ss.ffff"), "yyyy-MM-dd hh:mm:ss.ffff", $null) - [datetime]::ParseExact($logData.StartTimestamp.ToString("yyyy-MM-dd hh:mm:ss.ffff"), "yyyy-MM-dd hh:mm:ss.ffff", $null)
+                            $logData.StartTimestamp = $logData.StartTimestamp.ToString("yyyy-MM-dd hh:mm:ss.ffff", [System.Globalization.CultureInfo]::InvariantCulture)
+                            $logData.EndTimestamp = $logData.EndTimestamp.ToString("yyyy-MM-dd hh:mm:ss.ffff", [System.Globalization.CultureInfo]::InvariantCulture)
+                        } 
+                        catch {
+                            $_ | Select-Object * | Out-File "$path\ErrorObject.log" -Append -Force
+                            $logData.InstallStatus = "Error.."
+                        }
+                        $logData.InstallStatus = "OK"
+                        Return $logData
+                } -ArgumentList $command[$i].ToString(), $JobName,$path
+                $jobList += $job
+            }
+            $timeout = [DateTime]::Now.AddMinutes(45)
+            while ($jobList) {
+                if ([DateTime]::Now -gt $timeout) {
+                    Write-Error "The job has exceeded the 45 minutes timeout limit."
+                    break
+                }
+                foreach ($job in $jobList) {
+                    if ($job.State -eq "Completed") {
+                        # Get the job output
+                        $output = Receive-Job $job | Out-String -Stream
+                        Write-Output "Job $($job.Name) output:"
+                        $output | ForEach-Object {
+                            if ($_ -match '^(\S+)\s+(\S.*)$') {
+                                Write-Host $Matches[1] -ForegroundColor Green -NoNewline
+                                Write-Host ' ' $Matches[2]
+                            }    
+                            else {
+                                Write-Host $_
+                            }
+                        } 
+                        $jobList = $jobList | Where-Object { $_.InstanceId -ne $job.InstanceId }
+                        $job.Dispose()
+                    }
+                }
+                Start-Sleep -Milliseconds 100
+            }
+        }
+        if ($elapsedTime.Minutes -ge 45) {
+            Write-Error "Will have to abort since Install CAB job never finished, will try again.."
+            Exit 3
+        }
+        else {
+            if ($elapsedTime.Minutes -le 9) {
+                Write-Host "Elapsed total time for complete language ($Language) CAB installation: 0$($elapsedTime.Hours):0$($elapsedTime.Minutes):$($elapsedTime.Seconds).$($elapsedTime.Milliseconds)" -ForegroundColor Green
+            }
+            else {
+                Write-Host "Elapsed total time for complete language ($Language) CAB installation: 0$($elapsedTime.Hours):$($elapsedTime.Minutes):$($elapsedTime.Seconds).$($elapsedTime.Milliseconds)" -ForegroundColor Green
+            }
+            if(Get-Content -Path "$path\ErrorObject.log" -ErrorAction SilentlyContinue) {
+                Write-Warning "The Install CAB jobs finished in time but left errors.."
+                Write-Warning "Printing first 50 rows here:"
+                Get-Content -Path "$path\ErrorObject.log" -TotalCount 50 | Out-Host
+            }
+            else{
+                Write-Host "Looks like Install CAB files worked! Good job!" -ForegroundColor Green
+                Update-ExitCode -Path $progressFile -Part "Install-LanguageCabs" -ExitCode "Job says OK!"
+            }
+
+        }
+        New-PSDrive -Name HKCR -PSProvider Registry -Root HKEY_CLASSES_ROOT -erroraction silentlycontinue | Out-Null
+        Write-Host "Create toast handler for reboot, will run C:\Windows\System32\shutdown.exe -r -t 00 on choice reboot now" -ForegroundColor Green 
+        New-item 'HKCR:\ToastReboot' -force -ErrorAction SilentlyContinue | Out-Null
+        set-itemproperty 'HKCR:\ToastReboot' -name '(DEFAULT)' -value 'url:ToastReboot' -force -ErrorAction SilentlyContinue | Out-Null
+        set-itemproperty 'HKCR:\ToastReboot' -name 'URL Protocol' -value '' -force -ErrorAction SilentlyContinue | Out-Null
+        new-itemproperty -path 'HKCR:\ToastReboot' -propertytype dword -name 'EditFlags' -value 2162688 -ErrorAction SilentlyContinue | Out-Null
+        New-item 'HKCR:\ToastReboot\Shell\Open\command' -force -ErrorAction SilentlyContinue | Out-Null
+        set-itemproperty 'HKCR:\ToastReboot\Shell\Open\command' -name '(DEFAULT)' -value 'C:\Windows\System32\shutdown.exe -r -t 00' -force -ErrorAction SilentlyContinue #Pressing restart now on the toast will do just that :)
+        
+        if (-not (Get-Command "Invoke-AsCurrentUser_WithArgs" -ErrorAction SilentlyContinue)) {
+            $url = "https://raw.githubusercontent.com/ztrhgf/RunAsUser/master/Public/Invoke-AsCurrentUser.ps1"
+            $localFile = "$env:Temp\Invoke-AsCurrentUser_WithArgs.ps1"
+            $status = Invoke-WebRequest $url -PassThru -OutFile $localFile
+            if ($status.StatusCode -eq "200" -or ($status.StatusDescription -eq "OK") -or (Test-Path "$env:Temp\Invoke-AsCurrentUser_WithArgs.ps1")) {
+                (Get-Content $localFile -Raw) -replace "Invoke-AsCurrentUser", "Invoke-AsCurrentUser_WithArgs" | Set-Content $localFile
+                $newFunc = Get-Content $localFile -Raw
+                Invoke-Command -ScriptBlock ([Scriptblock]::Create($newFunc))
+                Invoke-Expression $newFunc -Verbose
+                Write-Host "Adding Invoke-AsCurrentUser_WithArgs as a temprary . sourced function" -ForegroundColor Green
+            }
+        }
+            #Sending the toast message to the user, also Invoke-AsCurrentUser_WithArgs require a hashtable as input
+        [hashtable]$Argument = @{
+            Os = $Os
+            ToastImage = $ToastImage
+        }
+        Invoke-AsCurrentUser_WithArgs -UseWindowsPowerShell -Argument $argument -ScriptBlock {
+            Param ([string]$Os,[string]$ToastImage)
+            Import-Module -Name BurntToast -ErrorAction SilentlyContinue -Force -Verbose
+            $burn = Get-Command "Submit-BTNotification" -ErrorAction SilentlyContinue
+            if (!($burn)) {
+                Import-Module $((Get-ChildItem -Path "C:\WINDOWS\system32\config\systemprofile\Documents\PowerShell\Modules\BurntToast\0.*.5\BurntToast.psd1").FullName) -Force # SYSTEM user has installed the module here.
+            }
+            Remove-BTNotification -UniqueIdentifier "LXP" -Confirm:$false -ErrorAction SilentlyContinue
+            Remove-BTNotification -Group "LXP" -ErrorAction SilentlyContinue
+            Remove-BTNotification -UniqueIdentifier "LXP" -ErrorAction SilentlyContinue
+            $heroimage = New-BTImage -Source $ToastImage -HeroImage
+            $Text1 = New-BTText -Content "Good news! Windows $Os language installation has finished in the backgroud, a restart is needed."
+            $Button = New-BTButton -Content "Restart Later" -snooze -id "SnoozeTime"
+            $Button2 = New-BTButton -Content "Restart Now" -Arguments "ToastReboot:" -ActivationType Protocol
+            $audio = New-BTAudio -Silent
+            $action = New-BTAction -Buttons $Button, $Button2
+            $Binding = New-BTBinding -Children $text1 -HeroImage $heroimage
+            $Visual = New-BTVisual -BindingGeneric $Binding
+            $Content = New-BTContent -Visual $Visual -Actions $action -Audio $audio -Duration Long
+            Submit-BTNotification -Content $Content -UniqueIdentifier "LXP"
+        }  
+    }
+    else {
+        try{
+            if(Get-ChildItem -Path .\ -Filter "*.cab") {
+                Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/abbodi1406/WHD/raw/master/scripts/ESD2CAB-CAB2ESD-2.zip' -OutFile .\ESD2CAB.zip
+                Start-Sleep 1
+                Expand-Archive -Path .\ESD2CAB.zip -DestinationPath .\ -Force -ErrorAction Stop
+                Start-Sleep 1
+                $file = Get-Content -Path ".\esd2cab_CLI.cmd"
+                $file = $file | Where-Object { $_ -notmatch "echo Press any key to exit\.\.\." } | Where-Object { $_ -notmatch "pause >nul" } #Removes the need to interact with the ESD to CAB conversion
+                Set-Content -Path ".\esd2cab_CLI.cmd" -Value $file
+                Start-Sleep 1
+                Write-Host "============================================================"
+                Write-Host "Start of converting .esd file to usable .cab file." -ForegroundColor Green
+                Write-Host "============================================================"
+                Write-Host "Running: .\esd2cab_CLI.cmd" -ForegroundColor Green
+                .\esd2cab_CLI.cmd
+            }
+            else {
+                Write-Host "Should be .cab files in this current directory but none was found, its a mystery!" -ForegroundColor Red
+            }
+        }
+        catch {
+            $_.Exception.Message
+        }
+    }
+    Stop-Transcript -ErrorAction SilentlyContinue 
+}
+
+Function Set-CheckProgressJSON {
+    param([string]$ProgressFile)
+@"
+{
+    "Progress": [
+    {
+        "Part": "SendFirstLogs",
+        "ExitCode": ""
+    },
+    {
+        "Part": "InstallOffice",
+        "ExitCode": ""
+    },
+    {
+        "Part": "PinIcons",
+        "ExitCode": ""
+    },
+    {
+        "Part": "Install-LanguageCabs",
+        "ExitCode": ""
+    },
+    {
+        "Part": "SendLastLogs",
+        "ExitCode": ""
+    }
+    ]
+}
+"@ | Out-File -FilePath $progressFile -Force
+}
+
+################################ Script Start ################################
+Start-Transcript -Path "C:\Temp\Intune\Scripts\TransLogOOBE.log" -Force -Verbose -ErrorAction SilentlyContinue
+Import-Module -Name ScheduledTasks -Force -ErrorAction SilentlyContinue
+Import-Module -Name International -Force
+Import-Module -Name Appx -Force -ErrorAction SilentlyContinue #-UseWindowsPowerShell
+$path="C:\Temp\Intune\LanguageFiles"
+$arch = "amd64"
+$Os = "11"
+$cn = $env:COMPUTERNAME.Substring(0,2)
+$Build = ((Get-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\Version" | Select-Object *).Property) #Current build
+$toastImage = "C:\Temp\Intune\Img\hero.png"
+$LocalRepositoryPath = "\\SRV-010\Public\Language"
+$progressFile = "C:\Temp\Intune\Scripts\CheckProgress.json"
+
+if (!(Test-Path $progressFile)) {
+	Set-CheckProgressJSON -ProgressFile $progressFile
+}
+if ((Update-ExitCode -Path $progressFile -Part "Install-LanguageCabs" -ReturnOnly) -ne "0x0") {
+	Write-Host "Will run Install-LanguageCabs to fix language settings.." -ForegroundColor Green
+  if ($cn -eq 'SE') {
+  	$language = "sv-se"
+  	Install-LanguageCabs -Language $language -Arch $arch -Install -Path $path -Os $Os -Build $Build.Replace('10.0.','') -ToastImage $toastImage -LocalRepository -LocalRepositoryPath $LocalRepositoryPath -ProgressFile $progressFile
+ 	}
+  elseif ($cn -eq 'NO') {
+  	$language = "nb-no"
+    Install-LanguageCabs -Language $language -Arch $arch -Install -Path $path -Os $Os -Build $Build.Replace('10.0.','') -ToastImage $toastImage -LocalRepository -LocalRepositoryPath $LocalRepositoryPath -ProgressFile $progressFile
+	}
+  elseif ($cn -eq 'FI') {
+  	$language = "fi-fi"
+    Install-LanguageCabs  -Language $language -Arch $arch -Install -Path $path -Os $Os -Build $Build.Replace('10.0.','') -ToastImage $toastImage -LocalRepository -LocalRepositoryPath $LocalRepositoryPath -ProgressFile $progressFile
+ 	}
+  elseif ($cn -eq 'EN') {
+  	$language = "en-us"
+    Install-LanguageCabs -Language $language -Arch $arch -Install -Path $path -Os $Os -Build $Build.Replace('10.0.','') -ToastImage $toastImage -LocalRepository -LocalRepositoryPath $LocalRepositoryPath -ProgressFile $progressFile
+ 	}
+  elseif ($cn -eq 'JP') {
+  	$language = "ja-jp"
+    Install-LanguageCabs  -Language $language -Arch $arch -Install -Path $path -Os $Os -Build $Build.Replace('10.0.','') -ToastImage $toastImage -LocalRepository -LocalRepositoryPath $LocalRepositoryPath -ProgressFile $progressFile
+ 	}
+  else {
+  	$language = "sv-se"
+    Install-LanguageCabs -Language $language -Arch $arch -Install -Path $path -Os $Os -Build $Build.Replace('10.0.','') -ToastImage $toastImage -LocalRepository -LocalRepositoryPath $LocalRepositoryPath -ProgressFile $progressFile
+ 	}
+  $Status = Get-Content -Path "C:\Windows\Logs\CBS\CBS.log" | Select-String -Pattern "Plan: Package: Microsoft-Windows-Client-LanguagePack-Package~\w+~$arch~$language~$build, current: Installed, pending: Default, start: Installed, applicable: Installed, targeted: Installed, limit: Installed","Plan: Package: Microsoft-Windows-LanguageFeatures-\w+-$language-Package~\w+~$arch~~$build, current: Installed, pending: Default, start: Installed, applicable: Installed, targeted: Installed, limit: Installed"
+  if ($Status) {
+  	Write-Host "C:\Windows\Logs\CBS\CBS.log says the Install CAB job did ok!" -ForegroundColor Green
+    if ((Update-ExitCode -Path $progressFile -Part "Install-LanguageCabs" -ReturnOnly) -eq "Job says OK!") {
+    	Write-Host "And the Install CAB Job reported back no errors!" -ForegroundColor Green
+      Update-ExitCode -Path $progressFile -Part "Install-LanguageCabs" -ExitCode "0x0"
+      Set-Location ../ -ErrorAction SilentlyContinue
+  	}
+    else{
+    	Write-Warning "C:\Windows\Logs\CBS\CBS.log says OK but the Install Job produced errors.."    
+   	}
+ 	}      
+}
+else {
+	Write-Host "Install-LanguageCabs is done, moving on.." -ForegroundColor Green
+}
+
+################################ Optional launch as a SYSTEM USER Scheduled task ################################
+
+$action = New-ScheduledTaskAction -Execute "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-WindowStyle Hidden -noprofile -executionpolicy bypass -file C:\Temp\Intune\Scripts\Install-LanguageCabs -Wait"
+$Settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 45) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Priority 0 -RestartCount 0 -DontStopOnIdleEnd -Compatibility "Win8"
+$principal = New-ScheduledTaskPrincipal -UserID "NT AUTHORITY\SYSTEM" -RunLevel Highest
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+$task = New-ScheduledTask -Action $action -Principal $principal -Settings $Settings -Trigger $trigger
+Register-ScheduledTask asSystem_InstallOffice_FixPins_ReportLogs_SetLanguage -InputObject $task -Force
+
+#Then you can unregister your job when finished like this#
+#Since you cant unregister an activ task when its running from itself, this is the next best thing imo.#
+
+$Task = Get-ScheduledTask -TaskName "asSystem_InstallOffice_FixPins_ReportLogs_SetLanguage"
+$Task.Triggers[0].EndBoundary = [DateTime]::Now.AddDays(5).ToString("yyyy-MM-dd'T'HH:mm:ss")
+$Task | Set-ScheduledTask
+$Task = Get-ScheduledTask -TaskName "asSystem_InstallOffice_FixPins_ReportLogs_SetLanguage"
+$Task.Settings[0].DeleteExpiredTaskAfter = [System.Xml.XmlConvert]::ToString((New-TimeSpan -Minutes 5))
+$Task | Set-ScheduledTask
