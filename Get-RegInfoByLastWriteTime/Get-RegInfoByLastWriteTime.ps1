@@ -171,3 +171,7 @@ function Get-RegInfoByLastWriteTime {
     }
     return $results | Sort-Object -Property LastWriteTime -Descending
 }
+$execution = Measure-Command -Expression {
+    $a = Get-RegInfoByLastWriteTime
+}
+Write-Host "Running Get-RegInfoByLastWriteTime tock $($execution.TotalMilliseconds) milliseconds and returned $($a.count) entries" -ForegroundColor Green
